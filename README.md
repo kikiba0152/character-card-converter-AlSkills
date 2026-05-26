@@ -54,7 +54,7 @@ A brand-new **language detection & translation module** automatically identifies
 
 ### Prerequisites · 前置要求
 
-- [Operit Platform](https://operit.ai) installed
+- [Operit Ai](https://github.com/AAswordman/Operit) installed
 - Network access for translation API calls
 
 ### Steps · 步骤
