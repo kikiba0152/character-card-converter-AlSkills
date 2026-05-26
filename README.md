@@ -150,12 +150,6 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 本项目基于 **MIT 许可证** 开源 — 详见 [LICENSE](LICENSE) 文件。
 
-```
-MIT License
-
-See the [LICENSE](LICENSE) file for full text.
-```
-
 ---
 
 ## 🙌 Contributing · 贡献
