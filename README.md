@@ -170,8 +170,8 @@ Feel free to open issues or submit PRs if you have suggestions or improvements!
 ---
 
 <p align="center">
-  Made with ❤️ for the <a href="https://operit.ai">Operit</a> Community
+  Made with ❤️ for the <a href="https://github.com/AAswordman/Operit">Operit</a> Community
 </p>
 <p align="center">
-  为 <a href="https://operit.ai">Operit</a> 社区制作
+  为 <a href="https://github.com/AAswordman/Operit">Operit</a> 社区制作
 </p>
