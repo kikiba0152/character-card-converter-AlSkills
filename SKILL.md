@@ -1,6 +1,7 @@
 ---
 name: "角色卡转换"
-description: "转换角色卡（含中英检测+自动翻译）"
+version: "1.1.0"
+description: "转换角色卡（含中英检测+自动翻译，支持PNG Base64自动解码）"
 ---
 
 # Skill: 角色卡转Tavo V2格式（中英文双语支持版）
@@ -313,7 +314,7 @@ v2 = {"spec": "chara_card_v2", "spec_version": "2.0", "data": {
     "alternate_greetings": DATA.get("alternate_greetings", []),
     "extensions": DATA.get("extensions", {}),
     "metadata": {**DATA.get("metadata", {}), "note": "已进行中文翻译",
-        "tool": {"name": "Operit Skill Converter", "version": "1.0.0"}}
+        "tool": {"name": "Operit Skill Converter", "version": "1.1.0"}}
 }}
 name_raw = DATA.get("name","Unknown")
 cleaned = re.sub(r'[^\u4e00-\u9fff\w\d_]', '_', name_raw)
@@ -344,7 +345,14 @@ PYEOF
 - 若检测为纯英文并翻译后，文件名添加`_CN`后缀
 - 若检测为中文/中英混合，不添加`_CN`后缀
 
-## 七、注意事项
+## 七、版本历史
+
+| 版本 | 日期 | 变更内容 |
+|------|------|---------|
+| **v1.1.0** | 2026-06-12 | 🔓 新增PNG Base64自动检测与解码；📋 输入格式判断提升至前置检查最高优先级（0.1）；🧹 第四章重构，回嵌模块独立为4.1/4.2 |
+| **v1.0.0** | 2026-05-26 | 🎉 初始版本：中英检测 + 自动翻译 + PNG回嵌 |
+
+## 八、注意事项
 1. 中文翻译要保留原角色卡的感情色彩，不能机械翻译
 2. 如果用户提供的是中文描述或中文角色卡，不要重复翻译
 3. 翻译后的 `first_mes` 必须仍然是可用的开场白格式
