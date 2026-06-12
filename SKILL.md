@@ -16,6 +16,22 @@ description: "转换角色卡（含中英检测+自动翻译）"
 - 或简单描述角色信息（此时需先按标准流程生成V2卡）
 
 ## 前置检查
+
+### 0.1 输入格式判断（最高优先级）
+AI收到用户上传的角色卡时，**首先**判断输入格式，决定后续处理路径：
+
+| 输入类型 | 判断依据 | 处理路径 |
+|---------|---------|---------|
+| **PNG角色卡** | 文件后缀为 `.png`，且PNG中包含`chara`/`ccv3`/`text`元数据chunk | PNG路径：提取→**Base64检测与解码**→检测→翻译→**回嵌** |
+| **JSON角色卡** | 文件后缀为 `.json`，或内容以 `{` 开头 | JSON路径：读取→检测→翻译→输出JSON |
+| **纯JSON文本** | 用户直接在消息中粘贴JSON内容 | JSON路径：解析→检测→翻译→输出JSON |
+
+**PNG路径关键补充**：提取chara字段的原始数据后，**必须先检测是否为Base64编码**：
+- 若原始字符串以 `{` 或 `[` 开头 → 明文JSON，直接解析
+- 若原始字符串不以 `{` 或 `[` 开头 → 尝试Base64解码后再解析JSON
+- 常见情况：SillyTavern导出的PNG角色卡，chara字段存储的是**Base64编码的JSON字符串**，需先`base64.b64decode()`再`json.loads()`
+
+### 0.2 内容确认
 1. **确认输入格式**：是否为有效JSON？是否为V2结构（含`spec: "chara_card_v2"`）？
 2. **识别来源**：SillyTavern / TavernAI / Character.AI / 其他
 3. **保留核心信息**：name, description, personality, scenario, first_mes, mes_example, alternate_greetings, tags, creator_notes 等
@@ -102,32 +118,25 @@ description: "转换角色卡（含中英检测+自动翻译）"
 | `metadata` | 补全标准化metadata |
 
 ### 3.3 严格化处理
-- 所有字符串类型字段必须是 `string`，不能是 `null` 或其他类型
+- 所有字符串类型字段必须是 `string`，不能是 `` 或其他类型
 - 标签必须是字符串数组
 - 删除多余空白和异常转义符号
 - JSON 序列化时使用 `ensure_ascii=False` 确保中文可读
 
 ---
 
-## 四、格式判断与PNG回嵌模块（新增）
+## 四、PNG回嵌模块
 
-### 4.1 输入格式判断规则
-AI收到用户上传的角色卡时，首先判断输入格式：
+> 输入格式判断已移至「前置检查 → 0.1 输入格式判断」，此处仅保留PNG回嵌相关逻辑。
 
-| 输入类型 | 判断依据 | 处理路径 |
-|---------|---------|---------|
-| **PNG角色卡** | 文件后缀为 `.png`，且PNG中包含`chara`/`ccv3`/`text`元数据chunk | PNG路径：提取→检测→翻译→**回嵌** |
-| **JSON角色卡** | 文件后缀为 `.json`，或内容以 `{` 开头 | JSON路径：读取→检测→翻译→输出JSON |
-| **纯JSON文本** | 用户直接在消息中粘贴JSON内容 | JSON路径：解析→检测→翻译→输出JSON |
-
-### 4.2 PNG回嵌规则
+### 4.1 PNG回嵌规则
 当输入为PNG角色卡时，最终输出的中文版角色卡**回嵌到原PNG的头像图像中**，生成带有原头像的PNG格式角色卡：
 
 1. **保留原PNG头像图像**（IHDR + IDAT chunk 保持不变）
 2. **替换/添加chara数据**：在IDAT之后、IEND之前，写入`tEXt` chunk，key为`chara`，value为base64编码的中文V2 JSON数据
 3. **输出文件名**：遵循原有命名规则，后缀为 `.png`（如`{清理后角色名}_V2_card_CN.png`）
 
-### 4.3 PNG回嵌（内联脚本模板）
+### 4.2 PNG回嵌（内联脚本模板）
 AI使用以下内联Python脚本将V2中文JSON数据回嵌到PNG中：
 
 ```python
@@ -187,7 +196,7 @@ PYEOF
 用户上传角色卡
     │
     ▼
-Step 0: 格式判断（见4.1）
+Step 0: 格式判断（见前置检查0.1）
     ├─ .png → PNG路径（走完整提取→翻译→回嵌流程）
     └─ .json / 纯JSON文本 → JSON路径（走读取→翻译→输出JSON流程）
     │
@@ -209,7 +218,7 @@ Step 3: 构建V2结构（脚本见5.3），生成中间JSON
     └─ metadata.note = "已进行中文翻译"
     │
 Step 4: 回嵌到PNG
-    ├─ 命令: python3 << 'PYEOF'（PNG回嵌脚本见4.3）
+    ├─ 命令: python3 << 'PYEOF'（PNG回嵌脚本见4.2）
     ├─ 输入: 原PNG路径 + 中文V2 JSON
     └─ 输出: /sdcard/Download/{清理后角色名}_V2_card_CN.png ✅
     │
@@ -253,6 +262,15 @@ while pos < len(d):
         break
 if not raw:
     print("❌ 未找到角色卡数据"); exit(1)
+# === Base64自动检测与解码 ===
+raw_stripped = raw.strip()
+if raw_stripped[0] not in ('{', '['):
+    # 不以 { 或 [ 开头 → 尝试Base64解码
+    try:
+        raw = base64.b64decode(raw_stripped).decode('utf-8')
+        print("🔓 检测到Base64编码，已自动解码")
+    except Exception:
+        print("❌ 数据不是有效JSON也不是Base64编码"); exit(1)
 o = json.loads(raw); i = o.get('data', o) if 'spec' in o else o
 need = []
 for f in ['description','personality','scenario','first_mes']:
