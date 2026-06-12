@@ -1,20 +1,20 @@
 ---
 name: "角色卡转换"
 version: "1.1.0"
-description: "转换角色卡（含中英检测+自动翻译，支持PNG Base64自动解码）"
+description: "转换角色卡（含中英检测+自动翻译，支持PNG Base64自动解码，V3格式输出）"
 ---
 
-# Skill: 角色卡转Tavo V2格式（中英文双语支持版）
+# Skill: 角色卡转换（中英文双语支持版，V3格式输出）
 
 ## 概述
-本技能用于将任意来源的角色卡（SillyTavern V1/V2、TavernAI、Character.AI JSON等）**统一转换为符合Tavo v0.83.1+严格规范的V2角色卡**。
-**新增特性**：自动检测角色卡内容的语言（中文/英文），并对指定的关键字段进行翻译，使输出角色卡适配中文友好型模型。
+本技能用于将任意来源的角色卡（SillyTavern V1/V2/V3、TavernAI、Character.AI JSON等）**统一转换为符合Tavo v0.87+严格规范的V3角色卡**。
+**核心特性**：自动检测角色卡内容的语言（中文/英文），对纯英文内容翻译为简体中文，输出V3格式PNG角色卡。
 
 ## 触发条件
 用户提供：
 - 角色卡JSON文件内容或片段
-- 角色卡PNG（内含JSON）
-- 或简单描述角色信息（此时需先按标准流程生成V2卡）
+- 角色卡PNG（内含JSON，支持Base64编码）
+- 或简单描述角色信息（此时需先按标准流程生成V3卡）
 
 ## 前置检查
 
@@ -33,28 +33,31 @@ AI收到用户上传的角色卡时，**首先**判断输入格式，决定后�
 - 常见情况：SillyTavern导出的PNG角色卡，chara字段存储的是**Base64编码的JSON字符串**，需先`base64.b64decode()`再`json.loads()`
 
 ### 0.2 内容确认
-1. **确认输入格式**：是否为有效JSON？是否为V2结构（含`spec: "chara_card_v2"`）？
+1. **确认输入格式**：是否为有效JSON？
 2. **识别来源**：SillyTavern / TavernAI / Character.AI / 其他
 3. **保留核心信息**：name, description, personality, scenario, first_mes, mes_example, alternate_greetings, tags, creator_notes 等
 
 ---
 
-## 一、语言检测模块（新增）
+## 一、语言检测模块
+
 在开始转换前，**必须**对角色卡的以下字段进行语言检测：
 
 ### 1.1 需要检测的字段
-- `data.description`
-- `data.personality`
-- `data.scenario`
-- `data.first_mes`
-- `data.tags`（标签数组，逐个检测）
+- `description`
+- `personality`
+- `scenario`
+- `first_mes`
+- `tags`（标签数组，逐个检测）
 
-### 1.2 检测规则
-1. 取每个字段的前100个字符（或完整内容，取较短者）
-2. 用正则表达式 `[\u4e00-\u9fff]` 检测是否包含中文字符
-3. 判定标准：
-   - **含中文字符** → 判定为「中文/中英混合内容」，**不需要翻译**
-   - **不含中文字符** → 判定为「纯英文内容」，**需要翻译为简体中文**
+### 1.2 检测规则（含中文占比阈值）
+1. 取每个字段的完整内容
+2. 用正则表达式 `[\u4e00-\u9fff]` 统计中文字符数量
+3. 计算中文字符占字段总字符数（去空白）的比例
+4. 判定标准：
+   - **中文占比 ≥ 5%** → 判定为「中文/中英混合内容」，**不需要翻译**
+   - **中文占比 < 5%** → 判定为「纯英文内容」（可能含角色名等零星中文），**需要翻译为简体中文**
+5. **重要**：不能仅凭"是否包含中文字符"判断——角色名（如"徐元"）可能出现在英文description中，占比极低（<1%），应视为英文内容翻译
 
 ### 1.3 例外处理
 - 如果 `first_mes` 中包含角色名称（如 `"Andy"`、`{{user}}` 等占位符），这些不视为英文，不触发翻译需求
@@ -62,22 +65,23 @@ AI收到用户上传的角色卡时，**首先**判断输入格式，决定后�
 
 ---
 
-## 二、翻译模块（新增）
+## 二、翻译模块
+
 对于被判定为「纯英文内容」的字段，执行以下翻译规则：
 
 ### 2.1 需要翻译的字段
 | 字段 | 翻译说明 |
 |------|---------|
-| `data.description` | 完整翻译为简体中文，保留`{{user}}`占位符原样 |
-| `data.personality` | 完整翻译为简体中文，保留`{{user}}`占位符原样 |
-| `data.scenario` | 完整翻译为简体中文，保留`{{user}}`占位符原样 |
-| `data.first_mes` | 完整翻译为简体中文，保留`{{user}}`占位符和动作格式`*...*`原样 |
-| `data.tags` | 将英文标签逐个翻译为中文（常见梗标签如`BL`/`YAOI`/`MLM`可保留） |
+| `description` | 完整翻译为简体中文，保留`{{user}}`占位符原样 |
+| `personality` | 完整翻译为简体中文，保留`{{user}}`占位符原样 |
+| `scenario` | 完整翻译为简体中文，保留`{{user}}`占位符原样 |
+| `first_mes` | 完整翻译为简体中文，保留`{{user}}`占位符和动作格式`*...*`原样 |
+| `tags` | 将英文标签逐个翻译为中文（常见梗标签如`BL`/`YAOI`/`MLM`可保留） |
 
 ### 2.2 翻译质量要求
-- 保留角色原本的语气和性格特征（cocky、teasing 等翻译成对应的中文表达）
+- 保留角色原本的语气和性格特征
 - 场景描写要自然流畅，不能生硬直译
-- 对话部分（`first_mes`中的引号内容）要翻译得像人物自然说出的中文
+- 对话部分要翻译得像人物自然说出的中文
 - 动作描写（`*...*`包裹的内容）翻译后保留星号格式
 - `{{user}}` 占位符保持原样，**不得翻译或替换**
 
@@ -88,17 +92,18 @@ AI收到用户上传的角色卡时，**首先**判断输入格式，决定后�
 
 ---
 
-## 三、转换规则（原有，增强版）
+## 三、转换规则
 
-### 3.1 结构标准化
-确保JSON顶层包含：
+### 3.1 结构标准化（V3格式）
+**输出必须使用V3格式**（Tavo v0.87+兼容）：
 ```json
 {
-  "spec": "chara_card_v2",
-  "spec_version": "2.0",
+  "spec": "chara_card_v3",
+  "spec_version": "3.0",
   "data": { ... }
 }
 ```
+> **关键发现**：v0.87仅识别`chara_card_v3`+`spec_version: 3.0`格式。扁平结构或V2格式会导致"未检测到PNG元数据"错误。
 
 ### 3.2 字段补齐与修复
 | 字段 | 说明 |
@@ -134,56 +139,49 @@ AI收到用户上传的角色卡时，**首先**判断输入格式，决定后�
 当输入为PNG角色卡时，最终输出的中文版角色卡**回嵌到原PNG的头像图像中**，生成带有原头像的PNG格式角色卡：
 
 1. **保留原PNG头像图像**（IHDR + IDAT chunk 保持不变）
-2. **替换/添加chara数据**：在IDAT之后、IEND之前，写入`tEXt` chunk，key为`chara`，value为base64编码的中文V2 JSON数据
+2. **替换/添加chara数据**：在IDAT之后、IEND之前，写入`tEXt` chunk，key为`chara`，value为base64编码的中文V3 JSON数据
 3. **输出文件名**：遵循原有命名规则，后缀为 `.png`（如`{清理后角色名}_V2_card_CN.png`）
 
-### 4.2 PNG回嵌（内联脚本模板）
-AI使用以下内联Python脚本将V2中文JSON数据回嵌到PNG中：
+### 4.2 PNG回嵌（内联脚本模板，已验证通过）
+AI使用以下内联Python脚本将V3中文JSON数据回嵌到PNG中。
+**核心原则**：直接定位原chara chunk的起始位置，取其之前的所有数据 + 新chara chunk + 标准IEND，避免遍历chunk导致的偏移bug。
 
 ```python
 python3 << 'PYEOF'
-import struct, base64, json, re, sys, zlib
+import struct, base64, json, zlib
 
 src_png = "输入的原PNG路径"           # AI替换为实际路径
 out_png = "输出的中文PNG路径"          # AI替换为实际路径
-chara_json = {...}                    # AI填入完整的V2中文JSON对象
+chara_json = {...}                    # AI填入完整的V3中文JSON对象
 
 with open(src_png, "rb") as f:
-    raw = f.read()
+    d = f.read()
 
-iend_pos = raw.rfind(b'IEND')
-if iend_pos == -1:
-    print("❌ 无效PNG"); exit(1)
+# 直接定位原chara chunk的length字段位置
+chara_kw = d.find(b'chara\x00')
+chunk_len_start = chara_kw - 8       # length(4) + type(4) = 8字节在key之前
+before = d[:chunk_len_start]          # chara之前的所有数据（header + IHDR + IDAT）
 
-header = raw[:8]
-body = raw[8:iend_pos]
-
-# 移除旧的chara/ccv3/text chunk
-pos = 0
-new_body = b''
-while pos < len(body):
-    l = struct.unpack('>I', body[pos:pos+4])[0]
-    ct = body[pos+4:pos+8].decode('ascii', errors='replace')
-    cd = body[pos+8:pos+8+l]
-    if ct in ('tEXt','zTXt','iTXt') and any(pre in cd[:10] for pre in [b'chara', b'ccv3', b'text']):
-        pass  # 跳过旧chara数据
-    else:
-        new_body += body[pos:pos+12+l]
-    pos += 12 + l
-
-# 编码新chara数据
+# 构建新chara chunk
 enc = base64.b64encode(json.dumps(chara_json, ensure_ascii=False).encode('utf-8'))
 chunk_data = b'chara\x00' + enc
 chunk_len = len(chunk_data)
 crc = struct.pack('>I', zlib.crc32(b'tEXt' + chunk_data) & 0xffffffff)
-new_chunk = struct.pack('>I', chunk_len) + b'tEXt' + chunk_data + crc
+new_chara = struct.pack('>I', chunk_len) + b'tEXt' + chunk_data + crc
 
+# 构建标准IEND（12字节）
+iend_crc = struct.pack('>I', zlib.crc32(b'IEND') & 0xffffffff)
+iend = struct.pack('>I', 0) + b'IEND' + iend_crc
+
+# 拼接：before + 新chara + IEND（IEND之后不拼任何数据）
 with open(out_png, "wb") as f:
-    f.write(header + new_body + new_chunk + body[iend_pos:])
+    f.write(before + new_chara + iend)
 
 print(f"✅ 回嵌完成: {out_png}")
 PYEOF
 ```
+
+> **踩坑记录**：旧版回嵌脚本使用遍历chunk+拼接方式，导致IEND被截断4字节、tEXt key变成`a`而非`chara`。直接定位法彻底解决此问题。
 
 ---
 
@@ -214,13 +212,13 @@ Step 2: AI读取终端输出，对纯英文字段进行翻译
     ├─ first_mes  → 翻译为中文（保留*动作*和引号格式）
     └─ tags       → 翻译为中文标签
     │
-Step 3: 构建V2结构（脚本见5.3），生成中间JSON
+Step 3: 构建V3结构（脚本见5.3），生成中间JSON
     ├─ 输出: /sdcard/Download/{清理后角色名}_V2_card_CN.json（中间文件）
     └─ metadata.note = "已进行中文翻译"
     │
 Step 4: 回嵌到PNG
     ├─ 命令: python3 << 'PYEOF'（PNG回嵌脚本见4.2）
-    ├─ 输入: 原PNG路径 + 中文V2 JSON
+    ├─ 输入: 原PNG路径 + 中文V3 JSON
     └─ 输出: /sdcard/Download/{清理后角色名}_V2_card_CN.png ✅
     │
     ▼
@@ -231,7 +229,7 @@ Step 1: 读取JSON + 语言检测
     │
 Step 2: AI对纯英文字段进行翻译（同PNG路径Step 2）
     │
-Step 3: 构建V2结构并写入文件（脚本见5.3）
+Step 3: 构建V3结构并写入文件（脚本见5.3）
     ├─ 文件: /sdcard/Download/{清理后角色名}_V2_card_CN.json ✅
     ├─ 编码: UTF-8, ensure_ascii=False
     └─ metadata.note = "已进行中文翻译"
@@ -266,21 +264,29 @@ if not raw:
 # === Base64自动检测与解码 ===
 raw_stripped = raw.strip()
 if raw_stripped[0] not in ('{', '['):
-    # 不以 { 或 [ 开头 → 尝试Base64解码
     try:
         raw = base64.b64decode(raw_stripped).decode('utf-8')
         print("🔓 检测到Base64编码，已自动解码")
     except Exception:
         print("❌ 数据不是有效JSON也不是Base64编码"); exit(1)
 o = json.loads(raw); i = o.get('data', o) if 'spec' in o else o
+# === 语言检测（含中文占比阈值） ===
 need = []
 for f in ['description','personality','scenario','first_mes']:
     v = i.get(f,'') or ''
-    if v.strip() and not re.search(r'[\u4e00-\u9fff]', v[:100]):
-        need.append(f)
+    if v.strip():
+        cn = len(re.findall(r'[\u4e00-\u9fff]', v))
+        total = len(re.sub(r'[\s\n\t]', '', v))
+        ratio = cn / max(total, 1)
+        if ratio < 0.05:  # 中文占比<5%视为英文
+            need.append(f)
 tags = i.get('tags',[])
-if tags and not re.search(r'[\u4e00-\u9fff]', ','.join(tags)[:100]):
-    need.append('tags')
+if tags:
+    tag_str = ','.join(tags)
+    cn = len(re.findall(r'[\u4e00-\u9fff]', tag_str))
+    total = len(re.sub(r'[\s\n\t]', '', tag_str))
+    if total > 0 and cn / total < 0.05:
+        need.append('tags')
 print(f"📛 {i.get('name','?')}")
 print(f"🔍 需翻译: {','.join(need) if need else '无'}")
 for f in ['description','personality','scenario','first_mes']:
@@ -288,7 +294,7 @@ for f in ['description','personality','scenario','first_mes']:
 PYEOF
 ```
 
-### 5.3 构建V2并输出（内联脚本模板）
+### 5.3 构建V3并输出（内联脚本模板）
 
 AI翻译完成后，使用此脚本构建最终文件：
 
@@ -308,7 +314,7 @@ for k, v in TRANSLATIONS.items():
         DATA['tags'] = v
     else:
         DATA[k] = v
-v2 = {"spec": "chara_card_v2", "spec_version": "2.0", "data": {
+v3 = {"spec": "chara_card_v3", "spec_version": "3.0", "data": {
     **DATA,
     "character_version": "1.0",
     "alternate_greetings": DATA.get("alternate_greetings", []),
@@ -321,7 +327,7 @@ cleaned = re.sub(r'[^\u4e00-\u9fff\w\d_]', '_', name_raw)
 cleaned = re.sub(r'_+', '_', cleaned).strip('_') or 'Unknown'
 out = f"/sdcard/Download/{cleaned}_V2_card_CN.json"
 with open(out, "w", encoding="utf-8") as f:
-    json.dump(v2, f, ensure_ascii=False, indent=2)
+    json.dump(v3, f, ensure_ascii=False, indent=2)
 print(f"✅ {out}")
 PYEOF
 ```
@@ -331,7 +337,7 @@ PYEOF
 ### 6.1 PNG输入（含角色卡数据的PNG）
 - **输出类型**：PNG（保留原头像图像，替换角色卡数据）
 - **文件名**：`/sdcard/Download/{清理后角色名}_V2_card_CN.png`
-- **回嵌方式**：在PNG的IDAT chunk之后、IEND之前写入`tEXt` chunk（key=`chara`，value为base64编码的中文V2 JSON）
+- **回嵌方式**：在PNG的IDAT chunk之后、IEND之前写入`tEXt` chunk（key=`chara`，value为base64编码的中文V3 JSON）
 
 ### 6.2 JSON输入（纯文本JSON文件）
 - **英文原版卡**（无需翻译）：`/sdcard/Download/{清理后角色名}_V2_card.json`
@@ -349,7 +355,7 @@ PYEOF
 
 | 版本 | 日期 | 变更内容 |
 |------|------|---------|
-| **v1.1.0** | 2026-06-12 | 🔓 新增PNG Base64自动检测与解码；📋 输入格式判断提升至前置检查最高优先级（0.1）；🧹 第四章重构，回嵌模块独立为4.1/4.2 |
+| **v1.1.0** | 2026-06-12 | 🔓 新增PNG Base64自动检测与解码；📋 输入格式判断提升至前置检查最高优先级；🔧 语言检测改为中文占比阈值（<5%视为英文）；📐 输出格式升级为V3（`chara_card_v3`）；🩹 修复PNG回嵌IEND截断bug（直接定位法） |
 | **v1.0.0** | 2026-05-26 | 🎉 初始版本：中英检测 + 自动翻译 + PNG回嵌 |
 
 ## 八、注意事项
@@ -360,3 +366,5 @@ PYEOF
 5. 翻译完所有字段后，在最终输出中注明「已进行中文翻译」
 6. PNG回嵌时务必保留原头像图像数据（IHDR + IDAT chunks），仅替换chara数据
 7. PNG输出时清理文件名中的特殊符号，确保文件名合法
+8. **输出必须使用V3格式**（`chara_card_v3` + `spec_version: 3.0`），否则v0.87无法识别
+9. **语言检测使用占比阈值**（<5%视为英文），避免角色名等零星中文导致整段英文被跳过
