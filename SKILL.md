@@ -1,7 +1,7 @@
 ---
 name: "角色卡转换"
-version: "2.0.0"
-description: "转换角色卡（含多语种检测+翻译、智能字段拆分补齐、PNG回嵌，V3格式输出）"
+version: "2.1.0"
+description: "转换角色卡（含多语种检测+翻译、智能字段拆分补齐、昵称自动生成、PNG回嵌，V3格式输出）"
 ---
 
 # Skill: 角色卡转换（智能拆分补齐版，V3格式输出）
@@ -11,7 +11,9 @@ description: "转换角色卡（含多语种检测+翻译、智能字段拆分�
 **核心特性**：
 - 自动检测非中文内容并翻译为简体中文
 - **智能拆分**：将 description/personality/scenario 中的冗余内容拆分到正确的功能字段
-- **智能补齐**：对缺失字段（system_prompt、post_history_instructions、tags、creator、creator_notes、mes_example）自动推演生成
+- **Description增强**：检查 description 外貌+身份子项完整性，缺失项自动补齐（详见 `SKILL_description_enhancer.md`）
+- **智能补齐**：对缺失字段（system_prompt、post_history_instructions、tags、creator、creator_notes、mes_example、nickname）自动推演生成
+- **昵称自动生成**：从角色名提取中文名/外文名/简称，分号分隔，方便对话中称呼
 - 支持PNG Base64自动解码与回嵌
 
 ## 触发条件
@@ -69,6 +71,7 @@ description: "转换角色卡（含多语种检测+翻译、智能字段拆分�
 | `tags` | **标签数组**（从内容提取的关键词） | — |
 | `creator` | **创建者**（从metadata提取或标记来源） | — |
 | `creator_notes` | **创建者备注**（记录转换过程） | — |
+| `nickname` | **昵称**（角色中文名/外文名/简称，分号`;`分隔，用于对话中替代全名称呼） | — |
 
 ### 2.2 拆分规则
 
@@ -119,6 +122,7 @@ Step D: 精简各字段
 | `creator` | 为空/null | 从 metadata.tool.name 提取，或标记 "Unknown" |
 | `creator_notes` | 为空/null | 记录转换过程（来源、翻译语言、拆分操作） |
 | `mes_example` | 为空字符串 | 从 personality + scenario + first_mes 推演5段对话 |
+| `nickname` | 为空/null | 从 name 字段提取：中文名（如「一舟」）、外文名（如「Caleb」）、常见简称，分号`;`分隔，3-5个即可 |
 | `character_version` | 缺失 | 补为 `"1.0"` |
 | `alternate_greetings` | 缺失 | 补为空数组 `[]` |
 | `extensions` | 缺失 | 保留原有或补为 `{}` |
@@ -176,8 +180,8 @@ Step D: 精简各字段
 }
 ```
 
-### 4.2 完整字段清单（15个核心字段）
-`name`, `description`, `personality`, `scenario`, `first_mes`, `mes_example`, `system_prompt`, `post_history_instructions`, `tags`, `creator`, `creator_notes`, `character_version`, `alternate_greetings`, `extensions`, `metadata`
+### 4.2 完整字段清单（16个核心字段）
+`name`, `description`, `personality`, `scenario`, `first_mes`, `mes_example`, `system_prompt`, `post_history_instructions`, `tags`, `creator`, `creator_notes`, `nickname`, `character_version`, `alternate_greetings`, `extensions`, `metadata`
 
 ### 4.3 严格化
 - 所有字符串字段不能为null，空则用`""`
@@ -228,7 +232,9 @@ PYEOF
 
 ## 六、AI执行流程
 
-### 6.1 完整流程
+### 6.1 完整流程（优化版）
+
+> **核心优化**：Step 2-4 合并为单步，AI 一次性完成翻译+拆分+补齐+昵称生成，直接输出完整 JSON，减少中间文件读写。
 
 ```
 用户上传角色卡
@@ -237,43 +243,44 @@ PYEOF
 Step 0: 格式判断（PNG/JSON）
     │
     ▼
-Step 1: 终端提取 + 语言检测（内联Python脚本）
-    ├─ 输出: 角色名、需翻译字段列表、各字段长度
+Step 1: 终端提取 + 语言检测（super_admin:terminal 执行 Python）
+    ├─ PNG: 提取 chara chunk → Base64解码 → 解析JSON
+    ├─ JSON: 直接读取
+    ├─ 输出: 角色名、各字段中文占比、缺失字段列表
     └─ 保存原始JSON到 /tmp/chara_raw.json
     │
     ▼
-Step 2: AI读取原始JSON，对非中文内容翻译
-    ├─ description → 翻译
-    ├─ personality → 翻译
-    ├─ scenario → 翻译
-    ├─ first_mes → 翻译
-    └─ tags（如有）→ 翻译
+Step 2: AI一次性完成翻译+拆分+补齐+昵称（合并原Step 2/3/3.5/4）
+    ├─ 读取 /tmp/chara_raw.json
+    ├─ 对非中文字段翻译为简体中文
+    ├─ 清理 HTML 标签（<p>、<strong>、<em>、<img> 等）→ 转为 Markdown
+    ├─ 智能拆分：description/personality/scenario 去冗余，内容归位
+    ├─ Description增强：检查外貌17项+性爱风格4项+身份5项，缺失补齐
+    ├─ 补齐 system_prompt / post_history_instructions / tags / mes_example
+    ├─ 生成 nickname：从 name 提取中文名、外文名、简称，分号;分隔
+    ├─ 补齐 creator / creator_notes / character_version / alternate_greetings / extensions
+    └─ 通过 cat heredoc 写入 /tmp/restructured_data.json
     │
     ▼
-Step 3: AI执行智能拆分（按第二章规则）
-    ├─ 分析三个主字段内容归属
-    ├─ 拆分冗余内容到正确字段
-    └─ 精简各字段到其功能定义范围
+Step 3: Python 构建 V3 JSON 并输出
+    ├─ 读取 /tmp/restructured_data.json
+    ├─ 包装为 {spec, spec_version, data} 结构
+    ├─ 输出 JSON → /sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.json
+    └─ 确保 JSON 合法（末尾 } 闭合，字符串内 " 转义）
     │
     ▼
-Step 4: AI执行智能补齐（按第三章规则）
-    ├─ system_prompt → 推演生成
-    ├─ post_history_instructions → 推演生成
-    ├─ tags → 提取生成
-    ├─ mes_example → 推演5段对话
-    ├─ creator / creator_notes → 补齐
-    └─ character_version / alternate_greetings / extensions → 补默认值
-    │
-    ▼
-Step 5: 构建完整V3 JSON并输出
-    ├─ 写入 /tmp/ 中间文件
-    ├─ Python脚本构建V3结构
-    └─ 输出到 /sdcard/Download/{角色名}_V3_restructured.json
-    │
-    ▼
-[可选] Step 6: PNG回嵌（仅PNG输入时）
-    └─ 输出 /sdcard/Download/{角色名}_V3_restructured.png
+[仅PNG输入] Step 4: PNG 回嵌
+    ├─ 保留原 PNG 头像（IHDR+IDAT）
+    ├─ 替换 chara chunk 为中文 V3 JSON
+    └─ 输出 → /sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.png
 ```
+
+### 6.2 关键注意事项
+
+1. **使用 super_admin:terminal 而非 code_runner**：PNG 文件较大时 code_runner 易超时卡死，terminal 更稳定，建议 timeoutMs=30000
+2. **JSON 完整性检查**：输出前必须验证 JSON 合法——常见问题：末尾缺 `}`、字符串内裸双引号未转义
+3. **HTML 清理**：JanitorAI 来源的 personality 常含 `<p>`、`<strong>`、`<img>` 等标签，必须转为纯 Markdown
+4. **nickname 格式**：分号`;`分隔，如 `凛太郎; 凛; Rintaro`，3-5个即可，覆盖中文全名/简称/外文名
 
 ### 6.2 提取与检测脚本（Step 1用）
 
@@ -370,7 +377,7 @@ name_raw = DATA.get('name', 'Unknown')
 cleaned = re.sub(r'[^\u4e00-\u9fff\w\d_]', '_', name_raw)
 cleaned = re.sub(r'_+', '_', cleaned).strip('_') or 'Unknown'
 
-out = f'/sdcard/Download/{cleaned}_V3_restructured.json'
+out = f'/sdcard/Download/Operit/charactercard/{cleaned}_V3_restructured.json'
 with open(out, 'w', encoding='utf-8') as f:
     json.dump(v3, f, ensure_ascii=False, indent=2)
 
@@ -385,8 +392,8 @@ print(f'Fields: {len(DATA)}')
 
 | 输入 | 输出 |
 |------|------|
-| PNG | `/sdcard/Download/{角色名}_V3_restructured.png`（回嵌）或 `.json` |
-| JSON | `/sdcard/Download/{角色名}_V3_restructured.json` |
+| PNG | `/sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.png`（回嵌）+ `.json` |
+| JSON | `/sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.json` |
 
 文件名规则：保留中文字符、字母、数字、下划线，其余替换为下划线。
 
@@ -396,6 +403,7 @@ print(f'Fields: {len(DATA)}')
 
 | 版本 | 日期 | 变更内容 |
 |------|------|---------|
+| **v2.1.0** | 2026-06-21 | 🏷️ 新增 nickname 字段自动生成（分号分隔多昵称）；⚡ 合并 Step 2-4 为单步，减少中间文件；📁 输出路径改为 charactercard/；🔧 指定 super_admin:terminal 执行脚本避免超时；🧹 新增 HTML 标签清理规则 |
 | **v2.0.0** | 2026-06-14 | 🧠 新增智能字段拆分模块（description/personality/scenario去冗余）；✨ 新增智能补齐模块（system_prompt/post_history_instructions/tags/mes_example自动推演）；🌐 语言检测扩展为通用非中文检测；📋 字段补齐从3个扩展到10+个；🔧 重写执行流程为6步完整管线 |
 | v1.1.0 | 2026-06-12 | Base64解码、占比阈值、V3格式、PNG回嵌修复 |
 | v1.0.0 | 2026-05-26 | 初始版本 |
