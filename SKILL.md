@@ -12,7 +12,7 @@ description: "转换角色卡（含多语种检测+翻译、智能字段拆分�
 - 自动检测非中文内容并翻译为简体中文
 - **智能拆分**：将 description/personality/scenario 中的冗余内容拆分到正确的功能字段
 - **Description增强**：检查 description 外貌+身份子项完整性，缺失项自动补齐（详见 `SKILL_description_enhancer.md`）
-- **智能补齐**：对缺失字段（system_prompt、post_history_instructions、tags、creator、creator_notes、mes_example、nickname）自动推演生成
+- **智能补齐**：对缺失字段（system_prompt、post_history_instructions、tags、creator、creator_notes、mes_example、nickname）自动推演生成，**system_prompt 和 post_history_instructions 默认以 `{{original}}` 开头保留用户预设**
 - **昵称自动生成**：从角色名提取翻译后的全名作为昵称（不拆分多个）
 - 支持PNG Base64自动解码与回嵌
 
@@ -144,6 +144,8 @@ Step D: 精简各字段
 ### 3.3 system_prompt 推演规则
 
 ```
+{{original}}
+
 ## 角色扮演规则
 你正在扮演 {角色名}，{一句话身份}。
 
@@ -156,9 +158,13 @@ Step D: 精简各字段
 - {禁止事项}
 ```
 
+> **重要**：`{{original}}` 放在开头，保留用户当前 Main Prompt 预设，角色专属规则追加其后，两者共存。
+
 ### 3.4 post_history_instructions 推演规则
 
 ```
+{{original}}
+
 ## 对话后指令
 - 保持角色一致性：{核心特质}
 - 回复长度根据角色性格推断：阳光开朗型偏长（3-5段），温柔含蓄型适中（2-3段），沉默寡言型偏短（1-2段）
@@ -166,6 +172,8 @@ Step D: 精简各字段
 - {从内容提取的风格约束}
 - 不要替{{user}}做决定或说话。
 ```
+
+> **重要**：`{{original}}` 放在开头，保留用户当前 Post-History Instructions 预设，角色专属指令追加其后，两者共存。
 
 ---
 
@@ -281,6 +289,7 @@ Step 3: Python 构建 V3 JSON 并输出
 2. **JSON 完整性检查**：输出前必须验证 JSON 合法——常见问题：末尾缺 `}`、字符串内裸双引号未转义
 3. **HTML 清理**：JanitorAI 来源的 personality 常含 `<p>`、`<strong>`、`<img>` 等标签，必须转为纯 Markdown
 4. **nickname 格式**：仅保留翻译后的角色全名，如 `凯尔`，不用分号分隔多个
+5. **保留预设内容**：`system_prompt` 和 `post_history_instructions` 开头必须添加 `{{original}}`，保留用户当前 Main Prompt / Post-History Instructions 预设，角色专属规则追加其后
 
 ### 6.2 提取与检测脚本（Step 1用）
 
