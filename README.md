@@ -1,4 +1,4 @@
-# 角色卡转换 Skill v2.1.0
+# 角色卡转换 Skill v2.1.1
 
 Operit 平台的 Skill，将任意来源的角色卡**统一转换为完整的 V3 角色卡**，含智能拆分补齐。
 
@@ -6,7 +6,7 @@ Operit 平台的 Skill，将任意来源的角色卡**统一转换为完整的 V
 
 - 🌐 **多语种检测与翻译**：自动检测非中文内容（英文/西班牙语/日语等），翻译为简体中文
 - 🧠 **智能字段拆分**：自动识别 description/personality/scenario 中的冗余内容，拆分到正确的功能字段
-- ✨ **智能补齐**：对缺失字段（system_prompt、post_history_instructions、tags、mes_example、nickname 等）自动推演生成
+- ✨ **智能补齐**：对缺失字段（system_prompt、post_history_instructions、tags、mes_example、nickname 等）自动推演生成，**system_prompt 和 post_history_instructions 默认以 `{{original}}` 开头保留用户预设**
 - 🏷️ **昵称自动生成**：从角色名提取中文名/外文名/简称，分号分隔，方便对话中称呼
 - 💬 **mes_example 推演**：基于角色设定自动生成 5 段对话示例
 - 🧹 **HTML 清理**：自动清理 JanitorAI 等来源的富文本标签，转为纯 Markdown
@@ -39,6 +39,9 @@ Step 4: [仅PNG] PNG 回嵌
 ```
 
 ## 🆕 更新日志
+
+### v2.1.1 (2026-06-22)
+- 📝 `system_prompt` 和 `post_history_instructions` 推演模板默认以 `{{original}}` 开头，保留用户 Main Prompt / Post-History Instructions 预设，角色专属规则追加其后
 
 ### v2.1.0 (2026-06-21)
 - 🏷️ 新增 nickname 字段自动生成（分号分隔多昵称）
