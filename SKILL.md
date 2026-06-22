@@ -1,6 +1,6 @@
 ---
 name: "角色卡转换"
-version: "2.1.0"
+version: "2.1.1"
 description: "转换角色卡（含多语种检测+翻译、智能字段拆分补齐、昵称自动生成、PNG回嵌，V3格式输出）"
 ---
 
@@ -412,6 +412,7 @@ print(f'Fields: {len(DATA)}')
 
 | 版本 | 日期 | 变更内容 |
 |------|------|---------|
+| **v2.1.1** | 2026-06-22 | 📝 `system_prompt` 和 `post_history_instructions` 推演模板默认以 `{{original}}` 开头，保留用户 Main Prompt / Post-History Instructions 预设，角色专属规则追加其后；📋 新增关键注意事项第5条 |
 | **v2.1.0** | 2026-06-21 | 🏷️ 新增 nickname 字段自动生成（分号分隔多昵称）；⚡ 合并 Step 2-4 为单步，减少中间文件；📁 输出路径改为 charactercard/；🔧 指定 super_admin:terminal 执行脚本避免超时；🧹 新增 HTML 标签清理规则 |
 | **v2.0.0** | 2026-06-14 | 🧠 新增智能字段拆分模块（description/personality/scenario去冗余）；✨ 新增智能补齐模块（system_prompt/post_history_instructions/tags/mes_example自动推演）；🌐 语言检测扩展为通用非中文检测；📋 字段补齐从3个扩展到10+个；🔧 重写执行流程为6步完整管线 |
 | v1.1.0 | 2026-06-12 | Base64解码、占比阈值、V3格式、PNG回嵌修复 |
