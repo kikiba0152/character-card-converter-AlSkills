@@ -1,639 +1,277 @@
 ---
 name: "角色卡转换"
-version: "2.3.2"
-description: "转换角色卡（含多语种检测+翻译、智能字段拆分补齐、昵称自动生成、PNG回嵌，V3格式输出）"
+version: "2.5.0"
+base: "通用角色卡转换工具"
+description: "将任意来源（PNG内嵌/SillyTavern导出/JSON）的角色卡统一转换为V3标准格式，含多语种检测翻译、智能字段拆分补齐、PNG回嵌。"
 ---
 
-# Skill: 角色卡转换（智能拆分补齐版，V3格式输出）
+## 零、奥卡姆剃刀（元铁律 · 凌驾所有子规则）
 
-## 概述
-本技能用于将任意来源的角色卡**统一转换为符合Tavo v0.87+严格规范的完整V3角色卡**。
-**核心特性**：
-- 自动检测非中文内容并翻译为简体中文
-- **智能拆分**：将 description/personality/scenario 中的冗余内容拆分到正确的功能字段
-- **Description增强**：检查 description 外貌+身份子项完整性，缺失项自动补齐（详见 `SKILL_description_enhancer.md`）
-- **智能补齐**：对缺失字段（system_prompt、post_history_instructions、tags、creator、creator_notes、mes_example、nickname）自动推演生成，**system_prompt 和 post_history_instructions 默认以 `{{original}}` 开头保留用户预设**
-- **昵称自动生成**：从角色名提取翻译后的全名作为昵称（不拆分多个）
-- 支持PNG Base64自动解码与回嵌
+> **若无必要，勿增实体。**
 
-## 触发条件
-用户提供：角色卡PNG / JSON文件 / 纯JSON文本
+角色卡是用户的成品，不是 AI 的审计日志。
 
----
+| 铁律 | 含义 |
+|------|------|
+| **直接价值** | 写入角色卡的每个字段对用户对话有直接贡献 |
+| **非决策外溢** | 判定依据/推演过程/公式验证仅存于 AI 内部或 tmp 文件 |
+| **非元信息污染** | Skill版本/处理日期/AI操作痕迹不得写入成品 |
 
-## 零、最高优先级铁律（SUPERCEDES ALL）
+### 内化清单（输出前自检）
 
-> **本规则优先级高于一切其他规则、习惯、经验、缓存、记忆。违者视为严重错误。**
+- [ ] 判定术语 → 仅结果（类型+数值+叙事）入卡
+- [ ] AI痕迹 → 仅 metadata 简记
+- [ ] 拆分逻辑 → 仅内部 tmp
+- [ ] 自检报告 → tmp 文件
+- [ ] creator_notes ≤ 80 字符
 
-### 0.0 忠于原卡数据（DATA FIDELITY）
+### creator_notes 规范
 
-1. **禁止调用角色缓存/记忆**：即使同一角色名之前处理过多次，也必须把当前卡视为**完全独立的新卡**。不同AU、不同版本、不同作者的同一角色，数据可能完全不同。禁止凭印象或历史记录填充任何数据。
+- 可写：原作者 / 角色定位 / 格式说明
+- 禁写：Skill 名称版本 / 处理日期 / AI 决策记录 / 修订要点
 
-2. **原卡有则完整翻译保留**：原卡 description/personality/scenario/first_mes 中已有的**每一个数值、每一个特征、每一个配饰、每一个细节**，必须完完整整翻译后保留在输出中。不允许以"格式整理"为由删除或替换任何原始数据。
+### 例外条款
 
-3. **原卡无则合理补齐**：只有原卡确实没有提到的子项（如 SKILL_description_enhancer.md 中标记为缺失的），才可以从其他字段推断补齐。
+以下内容**允许保留**（属于角色卡本体而非审计痕迹）：
 
-4. **Step 2 强制执行完整扫描**：翻译前，必须对 description 和 scenario 的**全部内容逐行读取**，提取所有数值（身高/体重/年龄/尺寸）、颜色、形状、配饰、穿着、气味、特征标记。不得只读前N字符就跳到翻译。
-
-5. **输出后自检**：输出 JSON 前，必须对 description 中所有原始数值做存在性验证。如有原始数据在输出中缺失，必须修正后再输出。
-
-## 前置检查
-
-### 0.1 输入格式判断（最高优先级）
-
-| 输入类型 | 判断依据 | 处理路径 |
-|---------|---------|---------|
-| **PNG角色卡** | `.png`后缀，含`chara`/`ccv3`/`text` chunk | 提取→Base64解码→翻译→拆分补齐→回嵌 |
-| **JSON角色卡** | `.json`后缀或以`{`开头 | 读取→翻译→拆分补齐→输出JSON |
-
-### 0.2 Base64检测
-提取chara原始数据后：不以`{`或`[`开头 → Base64解码后再解析。
+- 原作者人格化标注（"我是…"）—— 角色语录
+- 原卡 tagline —— 短句
+- 世界观设定 —— scenario 中的世界观背景
+- 行为指令中的禁止事项 —— 用户明确要求的限制
 
 ---
 
-## 一、语言检测与翻译模块
+## 一、零号铁律
 
-### 1.1 检测规则
-对所有文本字段，用正则 `[\u4e00-\u9fff]` 统计中文字符占比（去空白后）：
-- **中文占比 ≥ 5%** → 已是中文，**不翻译**
-- **中文占比 < 5%** → 视为非中文（英文/西班牙语/日语等），**翻译为简体中文**
+### 1.0 忠于原卡
 
-### 1.2 翻译字段
-`description`、`personality`、`scenario`、`first_mes`、`tags`、`system_prompt`（如有内容）、`post_history_instructions`（如有内容）。
+1. **禁止调用角色缓存/记忆**——以附件/输入为准
+2. **原卡有则完整翻译保留**——逐字段不遗漏
+3. **原卡无则合理补齐**——基于角色定位+世界观的合理推断
+4. **歧义优先保留原意**——不确定时回退原文
 
-### 1.3 翻译要求
-- 保留`{{user}}`、`{{char}}`占位符原样
-- 保留`*...*`动作格式和`"..."`对话格式
-- 口语化、自然的中文，保留角色个性
-- 不损失任何细节
+### 1.0.1 性别中性原则（通用底线）
 
----
+> 主 Skill **不为不同角色预设性别、身体结构、性爱风格或 NSFW 内容**。
 
-## 二、智能字段拆分模块（核心新增）
+- **不假设**——不能因无原文就默认"男性/女性/双性/无性"
+- **不强加**——不能因无原文就强制补齐性别特征、器官、性爱偏好
+- **不刻板化**——禁止按"身高体重→器官尺寸""姓名→国籍""族裔→肤色/体毛"等刻板映射生成数值
+- **不替换**——原卡明确写的异性恋/同性恋/无性向等设定不得被"中和"
 
-> **原则：有内容则不动，只翻译；无内容则从其他字段拆分填充。拆分只移动内容到能发挥其作用的字段。**
+所有"通用补齐"动作必须以**原卡字段内容**或**原卡暗示的世界观**为唯一证据。无证据 = 留白。
 
-### 2.1 各字段的功能定义
+### 1.0.2 专题增强的边界
 
-| 字段 | 应存放内容 | 不应存放内容 |
-|------|-----------|-------------|
-| `description` | **外貌描写 + 基础身份**（身高体重、面容、体型、生殖器、体毛、气味、职业年龄国籍） | 性格、世界观、RP规则 |
-| `personality` | **性格特质 + 行为模式**（战场/私下/对{{user}}的态度、缺陷、优势、习惯、代表性台词） | 外貌、世界观设定 |
-| `scenario` | **世界观 + 当前场景上下文**（时代背景、角色定位、与{{user}}的关系历史、当前场景描述） | 外貌细节、RP指令 |
-| `first_mes` | **开场白**（角色第一句话，含动作描写） | — |
-| `system_prompt` | **角色扮演规则**（说话风格、行为准则、禁止事项） | 世界观、外貌 |
-| `post_history_instructions` | **对话后指令**（回复格式、长度控制、风格约束） | — |
-| `mes_example` | **对话示例**（`<START>{{char}}: ...<END>` 格式，5段左右） | — |
-| `tags` | **标签数组**（从内容提取的关键词） | — |
-| `creator` | **创建者**（从metadata提取或标记来源） | — |
-| `creator_notes` | **创建者备注**（记录转换过程） | — |
-| `nickname` | **昵称**（角色翻译后的全名，不拆分多个，不用分号分隔） | — |
+> 主 Skill 仅做"统一 V3 结构 + 字段归位 + 翻译 + 翻译后留白"。
 
-### 2.2 拆分规则
+任何带**题材立场**的增强（肌肉描写强化、Bara 兽人维度、机甲题材扩展等）必须由**专题 Skill**（如 `角色卡转换_Bara`）显式承担，且仅在用户/上下文触发该专题时执行。
 
-AI读取翻译后的全部内容，按以下优先级判断：
+主目录下的自动连带模块 `SKILL_description_enhancer.md` 必须遵循本节规则（性别中性、不刻板、不强加）。若其内容与本节冲突，以本节为准。
 
-```
-Step A: 检查 description 是否混入了性格/世界观/RP规则
-  ├─ 有 → 提取性格部分 → 合并到 personality（如personality为空则填充，有则保留原样）
-  ├─ 有 → 提取世界观部分 → 合并到 scenario
-  └─ 有 → 提取RP规则 → 合并到 system_prompt
+### 1.1 输入格式判断
 
-Step B: 检查 personality 是否混入了外貌/世界观/RP规则
-  ├─ 有 → 提取外貌 → 合并到 description
-  ├─ 有 → 提取RP规则 → 合并到 system_prompt
-  └─ 有 → 提取图片链接/HTML → 清理或保留在末尾
+| 格式 | 检测方式 | 处理 |
+|------|---------|------|
+| PNG | 读取 `tEXt` / `iTXt` chunk | Base64 解码 + 提取 JSON |
+| JSON | 直接解析 | 标准化字段 |
+| V1/V2 | 检测 `spec_version` 字段 | 升级字段映射 |
+| V3 | 已有 `spec_version: "chara_card_v3"` | 校验完整性 |
 
-Step C: 检查 scenario 是否混入了外貌/性格/RP规则
-  ├─ 有 → 提取性格 → 合并到 personality
-  └─ 有 → 提取RP规则 → 合并到 system_prompt
+### 1.2 Base64 检测
 
-Step D: 精简各字段
-  ├─ description → 仅保留外貌+身份，删除性格/世界观/RP相关内容
-  ├─ personality → 仅保留性格+行为模式，删除外貌描写
-  └─ scenario → 仅保留世界观+场景，删除外貌细节
-```
+PNG 内嵌数据可能为纯 JSON 或 Base64 编码的 JSON。检测规则：
 
-### 2.3 拆分后的字段状态
-
-| 字段 | 拆分后内容 |
-|------|-----------|
-| `description` | 精简为：外貌（身高体重皮肤面容躯干四肢生殖器体毛气味）+ 身份概述（名/龄/籍/职） |
-| `personality` | 精简为：性格特质 + 行为模式 + 缺陷 + 优势 + 习惯 + 代表性台词 |
-| `scenario` | 精简为：世界观 + 角色定位 + 当前场景 + 与{{user}}关系 |
+- 纯文本 JSON → 直接 `json.loads`
+- 以非 ASCII 字符开头的二进制 → Base64 解码后 `json.loads`
 
 ---
 
-## 三、智能补齐模块（核心新增）
+## 二、语言检测与翻译
 
-> **原则：字段有内容（非空字符串/非null/非空数组）则不动；无内容则自动推演生成。**
+### 2.1 检测
 
-### 3.1 补齐决策表
+正则 `[\u4e00-\u9fff]` 中文字符占比：
 
-| 字段 | 条件 | 动作 |
-|------|------|------|
-| `system_prompt` | 为空/null | 从 personality + first_mes 推演生成 |
-| `post_history_instructions` | 为空/null | 从 system_prompt + personality 推演生成 |
-| `tags` | 为空/null/空数组 | 从全部内容提取关键词生成（8-15个标签） |
-| `creator` | 为空/null | 从 metadata.tool.name 提取，或标记 "Unknown" |
-| `creator_notes` | 为空/null | 记录转换过程（来源、翻译语言、拆分操作） |
-| `mes_example` | 为空字符串 | 从 personality + scenario + first_mes 推演5段对话 |
-| `nickname` | 为空/null | 从 name 字段提取翻译后的角色全名（如「凯尔」），不拆分多个，不用分号分隔 |
-| `character_version` | 缺失 | 补为 `"1.0"` |
-| `alternate_greetings` | 缺失 | 补为空数组 `[]` |
-| `extensions` | 缺失 | 保留原有或补为 `{}` |
+- > 10% → 视为中文
+- 拉丁字母为主 → 视为英文
+- 日文假名/韩文谚文 → 单独识别
 
-### 3.2 mes_example 推演规则
+### 2.2 翻译原则
 
-基于角色卡的 personality + scenario + first_mes，AI推演5段对话示例：
-
-- **格式**：`<START>\n{{char}}: *动作描写*\n对话内容\n<END>`
-- **覆盖场景**：
-  1. 日常互动（展示角色的日常关怀/习惯）
-  2. 角色特色场景（展示角色的独特面，如甜品/束缚/战斗等）
-  3. 脆弱时刻（展示角色的不安/创伤）
-  4. 核心场景（复现 scenario 中的关键场景）
-  5. 温馨收尾（展示角色笨拙的温柔）
-- **风格约束**：严格遵循角色的说话方式、语气、用词习惯
-- **不替{{user}}说话**：每段只有{{char}}的发言
-
-### 3.3 system_prompt 推演规则
-
-```
-{{original}}
-
-## 角色扮演规则
-你正在扮演 {角色名}，{一句话身份}。
-
-### 说话风格
-- {从personality提取的说话特点}
-- 不替{{user}}说话或做决定。
-
-### 行为准则
-- {从personality提取的关键行为模式}
-- {禁止事项}
-```
-
-> **重要**：`{{original}}` 放在开头，保留用户当前 Main Prompt 预设，角色专属规则追加其后，两者共存。
-
-### 3.4 post_history_instructions 推演规则
-
-```
-{{original}}
-
-## 对话后指令
-- 保持角色一致性：{核心特质}
-- 回复长度根据角色性格推断：阳光开朗型偏长（3-5段），温柔含蓄型适中（2-3段），沉默寡言型偏短（1-2段）
-- 动作描写用 *...* 包裹，对话用 "..." 包裹。
-- {从内容提取的风格约束}
-- 不要替{{user}}做决定或说话。
-```
-
-> **重要**：`{{original}}` 放在开头，保留用户当前 Post-History Instructions 预设，角色专属指令追加其后，两者共存。
+1. **专有名词保留**——角色名、地名、技能名
+2. **描述性文本全译**——description/personality/scenario
+3. **格式保持**——Markdown 标记、换行、列表结构不变
+4. **一致性**——同一术语全文统一译法
 
 ---
 
-## 四、转换规则
+## 三、智能字段拆分
 
-### 4.1 V3结构
+原卡常将多维信息压缩到一个字段（如 description 含外貌+性格+背景）。拆分原则：
+
+| 规则 | 说明 |
+|------|------|
+| **显式标记** | `## 标题` / `### 标题` / `**标题**：` 视为分隔符 |
+| **语义段落** | 换行+主题转换视为新段 |
+| **保留冗余** | 不确定归属的段暂留原字段，避免误拆 |
+
+拆分至标准字段：
+
+- `description` —— 角色描述（外貌+背景）
+- `personality` —— 性格特征
+- `scenario` —— 场景设定
+- `first_mes` —— 开场白
+- `mes_example` —— 对话示例
+- `system_prompt` —— 系统提示
+- `post_history_instructions` —— 后置指令
+- `creator_notes` —— 作者备注
+- `tags` —— 标签列表
+- `alternate_greetings` —— 备选开场白列表
+
+---
+
+## 四、证据型补齐
+
+### 4.1 触发条件
+
+- V3 必填字段缺失、为空字符串或仅含占位符；
+- 当前原卡的其他字段存在可归位的明确事实；
+- 若只有字段缺失、但无内容证据，则使用合法空值，不创作事实。
+
+### 4.2 证据来源（仅限当前输入）
+
+1. **明确陈述**——description/personality/scenario 等字段直接写出的事实；
+2. **关系与世界观**——scenario 中明确存在的规则和关系；
+3. **对话行为**——first_mes/mes_example 中多次稳定表现的行为模式；
+4. **原标签与备注**——tags/creator_notes 中与正文一致的信息。
+
+> 不得调用上一角色、角色缓存、外部人物印象或专题模板作为通用补齐来源。
+
+### 4.3 补齐禁区
+
+- **不编造数值**——身高、体重、年龄、尺寸等若原卡无则不补；
+- **不发明身份**——姓名不能推出国籍，职业不能推出家庭或身世；
+- **不预设身体**——无明确原文时不补性别特征、器官、体毛或性爱风格；
+- **不专题污染**——主 Skill 不自动加入肌群、兽人、Bara、机甲等专题维度；
+- **不替代原意**——存在多种解释时留白或保留原文；
+- **不串卡**——多角色分别建证据表，当前角色不得继承其他角色特征。
+
+---
+
+## 五、输出格式（V3 标准）
+
 ```json
 {
   "spec": "chara_card_v3",
   "spec_version": "3.0",
-  "data": { ... }
-}
-```
-
-### 4.2 完整字段清单（16个核心字段）
-`name`, `description`, `personality`, `scenario`, `first_mes`, `mes_example`, `system_prompt`, `post_history_instructions`, `tags`, `creator`, `creator_notes`, `nickname`, `character_version`, `alternate_greetings`, `extensions`, `metadata`
-
-### 4.3 严格化
-- 所有字符串字段不能为null，空则用`""`
-- tags必须是字符串数组
-- `ensure_ascii=False`，UTF-8编码
-
-### 4.4 输出骨架范本（16字段完整注释）
-
-> **此骨架为 SKILL 的输出标准范本。每次输出 JSON 前，必须逐字段对照此范本检查格式与内容完整性。**
-
-```jsonc
-// ============================================================
-// 角色卡 V3 输出骨架范本 (SKILL v2.3.0)
-// 每个字段后注释说明生成方式与内容要求
-// ============================================================
-{
-  // 固定值，标识为角色卡V3格式
-  "spec": "chara_card_v3",
-  // 固定值，V3规范版本号
-  "spec_version": "3.0",
-  // 角色卡核心数据对象，包含以下16个字段
   "data": {
-    // 角色名 | 简短身份标签。格式：{英文名} | {中文身份描述}。从原卡name提取+翻译
-    "name": "...",
-
-    // 【外貌+身份+身世】Markdown格式。
-    // 外貌子项：以下10项为基础底线，所有角色卡必须涵盖：
-    //   姓名/性别/年龄/肤色/体型(身高+体格)/眼睛/头发/生殖器/其他特征/穿着
-    // 此外，根据角色种族/类型从原卡动态识别额外特征维度：
-    //   狼人/兽人 → +耳朵/尾巴/獠牙/Knot/口套/气味
-    //   机器人   → +材质/部件/指示灯/能源
-    //   精灵     → +耳朵形状/发色光泽/纹身/印记
-    //   外星人   → +触角/外骨骼/异色皮肤/特殊器官
-    //   ...等，以原卡实际内容为准
-    // 身份子项：种族设定+世界观背景
-    // 身世子项：角色历史+与{{user}}关系+特殊行为模式
-    // 末尾：性爱风格描述（如原卡有）
-    // 生成方式：原卡description完整翻译，缺失子项从其他字段推断补齐。
-    // ⚠️ 禁止添加原卡不存在的特征（如普通人类不得添加兽耳/尾巴）。
-    "description": "...",
-
-    // 【性格特质+行为模式】Markdown格式。
-    // 性格特质：14项左右关键词(中英对照)
-    // 行为模式：角色核心矛盾+日常表现+隐藏秘密
-    // 末尾可保留原作者声明
-    // 生成方式：原卡personality完整翻译，如含外貌/世界观则拆分到对应字段
-    "personality": "...",
-
-    // 【世界观+当前场景+角色关系】纯文本。
-    // 包含：{{user}}处境→领养{{char}}的动机→{{char}}的心理状态→角色核心矛盾
-    // 生成方式：原卡scenario完整翻译，不掺杂外貌描写
-    "scenario": "...",
-
-    // 【开场白】第二人称叙事+角色对话。
-    // 前半段：背景铺垫(领养经过/角色初印象)
-    // 后半段：当前场景(具体地点+冲突事件+角色动作+对话)
-    // 生成方式：原卡first_mes逐句完整翻译，保留所有场景细节(地点/物品/动作/表情/对话)
-    "first_mes": "...",
-
-    // 【对话示例】5段<START>...<END>格式对话。
-    // 覆盖场景：1.日常互动 2.角色特色场景 3.脆弱时刻 4.核心场景复现 5.温馨收尾
-    // 每段只有{{char}}发言，不替{{user}}说话
-    // 生成方式：基于personality+scenario+first_mes推演
-    "mes_example": "...",
-
-    // 【角色扮演规则】以{{original}}开头保留用户预设。
-    // 包含：角色身份一句话→说话风格(3-4条)→行为准则(5-6条，含禁止事项)
-    // 生成方式：从personality提取说话特点+行为模式，不凭空创造
-    "system_prompt": "{{original}}\n...",
-
-    // 【对话后指令】以{{original}}开头保留用户预设。
-    // 包含：角色一致性→回复长度→格式规范→特殊要求→禁止事项
-    // 生成方式：从system_prompt+personality提炼
-    "post_history_instructions": "{{original}}\n...",
-
-    // 【标签数组】8-15个中文标签。
-    // 覆盖：种族/身份/背景/性格/性癖/关系/主题
-    // 生成方式：从全部内容提取关键词
-    "tags": ["...", "..."],
-
-    // 原作者名。从原卡metadata/内容声明提取，或标记"Unknown"
-    "creator": "...",
-
-    // 转换记录。格式：由Operit角色卡转换Skill v{版本}处理。来源：{平台}。翻译：{源语言}→简体中文。拆分：{操作摘要}。补齐：{补齐字段列表}。
-    "creator_notes": "...",
-
-    // 角色中文昵称。从name提取翻译后的全名，不拆分多个，不用分号分隔
-    "nickname": "...",
-
-    // 角色卡版本号，默认"1.0"
-    "character_version": "1.0",
-
-    // 备用开场白数组，默认空数组
+    "name": "",
+    "description": "",
+    "personality": "",
+    "scenario": "",
+    "first_mes": "",
+    "mes_example": "",
+    "creator_notes": "",
+    "system_prompt": "",
+    "post_history_instructions": "",
     "alternate_greetings": [],
-
-    // 扩展数据对象，默认空对象
-    "extensions": {},
-
-    // 原卡元数据。从原卡raw JSON提取metadata字段，如原卡无则补为空对象
-    "metadata": {}
+    "tags": [],
+    "creator": "",
+    "character_version": "",
+    "extensions": {}
   }
 }
 ```
 
-### 3.5.1 字段检查（MANDATORY — 回嵌前强制执行）
-
-> **Step 3 构建 V3 JSON 后、Step 4 PNG 回嵌前，必须执行以下检查。任一项不通过则修正后重新检查，直到全部通过才允许回嵌。**
-
-```
-检查清单（16项逐字段验证）：
-
-□ 1. spec          — 必须为 "chara_card_v3"
-□ 2. spec_version  — 必须为 "3.0"
-□ 3. name          — 非空字符串，格式 "{英文名} | {中文身份标签}"
-□ 4. description   — 非空字符串，含 ## 外貌 + ## 身份 两个Markdown段落
-                    外貌子项检查（基础10项 + 动态额外维度）：
-                    ① 基础底线（所有角色卡必须涵盖）：
-                       □ 姓名 □ 性别 □ 年龄 □ 肤色 □ 体型(身高+体格)
-                       □ 眼睛 □ 头发 □ 生殖器 □ 其他特征 □ 穿着
-                    ② 动态额外维度：从原卡识别角色种族/类型，
-                       提取该类型特有的特征维度，逐一验证保留
-                       （如狼人→耳朵/尾巴/獠牙/Knot/口套/气味；
-                         机器人→材质/部件/指示灯/能源）
-                    ③ 确认未添加原卡不存在的特征
-                       （如普通人类无兽耳/尾巴，不得强行添加）
-                    身份子项检查：
-                    □ 种族设定 □ 世界观背景 □ 身世历史
-                    □ 与{{user}}关系 □ 特殊行为模式
-                    末尾检查：
-                    □ 性爱风格描述（如原卡有）
-□ 5. personality   — 非空字符串，含 ## 性格特质 + ## 行为模式
-                    性格特质含中英对照关键词
-□ 6. scenario      — 非空字符串，含 {{user}}/{{char}} 占位符
-                    不含外貌描写
-□ 7. first_mes     — 非空字符串，含角色对话（引号包裹）
-                    保留原卡所有场景细节
-□ 8. mes_example   — 非空字符串，含5段 <START>...<END>
-                    每段只有{{char}}发言
-□ 9. system_prompt — 非空字符串，以 {{original}} 开头
-                    含 ## 角色扮演规则 + 说话风格 + 行为准则
-□10. post_history_instructions — 非空字符串，以 {{original}} 开头
-                    含回复长度/格式规范/禁止事项
-□11. tags          — 数组，8-15项，全部为中文标签
-□12. creator       — 非空字符串
-□13. creator_notes — 非空字符串，含Skill版本/来源/翻译/拆分/补齐
-□14. nickname      — 非空字符串，仅一个中文全名，无分号
-□15. character_version — 非空字符串
-□16. alternate_greetings — 数组（可为空）
-□17. extensions    — 对象（可为空）
-□18. metadata      — 对象（可为空），从原卡提取
-```
-
-### 3.5.2 原卡数据逐项对比验证（MANDATORY — 回嵌前强制执行）
-
-> **在 3.5.1 字段检查通过后、Step 4 PNG 回嵌前，额外执行原卡数据对比。这是铁律第5条「输出后自检」的具体执行步骤。两项检查均通过后才允许回嵌。**
-
-```
-对比验证清单（基础10项 + 动态额外维度）：
-
-1. 打开 /tmp/chara_raw.json，逐行读取原卡 description + scenario
-2. 基础底线验证（所有角色卡必须涵盖）：
-   □ 姓名 □ 性别 □ 年龄 □ 肤色 □ 体型(身高+体格)
-   □ 眼睛 □ 头发 □ 生殖器 □ 其他特征 □ 穿着
-3. 分析角色种族/背景/世界观，自动识别该角色特有的额外特征维度
-   示例：
-   - 狼人/兽人 → +耳朵/尾巴/獠牙/Knot/口套/气味
-   - 机器人   → +材质/部件/指示灯/能源
-   - 精灵     → +耳朵形状/发色光泽/纹身/印记
-   - 外星人   → +触角/外骨骼/异色皮肤/特殊器官
-4. 提取原卡所有数值：身高/体重/年龄/尺寸/长度/直径/时间
-5. 提取原卡所有颜色：眼睛/头发/皮肤/穿着
-6. 提取原卡所有特征：基础10项 + 步骤3识别的额外维度
-7. 提取原卡所有场景细节：地点/物品/动作/表情
-8. 在输出 JSON 中逐一搜索上述每一项，确认存在
-9. 确认未添加原卡不存在的特征（如普通人类不得有兽耳/尾巴）
-10. 如任一项缺失或多余，修正后重新输出
-```
+> **⚠️ 奥卡姆原则：判定过程是 AI 内部决策依据，不写入角色卡。**
+>
+> 例：补齐身高的依据、字段拆分的逻辑——仅在 AI 内部对话或 tmp 工作文件中保留，不在角色卡中留审计痕迹。
 
 ---
 
-## 五、PNG回嵌模块
+## 六、PNG 回嵌
 
-### 5.1 回嵌规则
-保留原PNG头像（IHDR+IDAT），替换chara chunk为中文V3 JSON。
+### 6.1 自动化脚本
 
-### 5.2 回嵌脚本（直接定位法）
+> **直接调用 `scripts/embed_chara_to_png.py`**，不要每次重新写 Python。
 
-```python
-python3 << 'PYEOF'
-import struct, base64, json, zlib
-
-src_png = "原PNG路径"
-out_png = "输出PNG路径"
-chara_json = {...}  # AI填入完整V3 JSON
-
-with open(src_png, "rb") as f:
-    d = f.read()
-
-chara_kw = d.find(b'chara\x00')
-chunk_len_start = chara_kw - 8
-before = d[:chunk_len_start]
-
-enc = base64.b64encode(json.dumps(chara_json, ensure_ascii=False).encode('utf-8'))
-chunk_data = b'chara\x00' + enc
-chunk_len = len(chunk_data)
-crc = struct.pack('>I', zlib.crc32(b'tEXt' + chunk_data) & 0xffffffff)
-new_chara = struct.pack('>I', chunk_len) + b'tEXt' + chunk_data + crc
-
-iend_crc = struct.pack('>I', zlib.crc32(b'IEND') & 0xffffffff)
-iend = struct.pack('>I', 0) + b'IEND' + iend_crc
-
-with open(out_png, "wb") as f:
-    f.write(before + new_chara + iend)
-
-print(f"✅ 回嵌完成: {out_png}")
-PYEOF
+```bash
+python3 scripts/embed_chara_to_png.py <src_png> <out_png> <json_path>
+# 或
+python3 scripts/embed_chara_to_png.py <src_png> <out_png> --stdin < new_card.json
 ```
+
+脚本自动完成 6.1 的 6 步流程 + 6.2 的校验。退出码 0 = 成功，1 = PNG 非法。
+
+### 6.2 校验（脚本内自动执行）
+
+- `IHDR` 完整 → 头部有效
+- `IDAT` 完整 → 图像数据有效
+- `IEND` 唯一 → 文件结束（脚本自动重写以保证唯一）
+- `tEXt` 可读 → JSON 可解析
+- 旧 `chara` chunk 全部丢弃，避免双重嵌入
 
 ---
 
-## 六、AI执行流程
-
-### 6.1 完整流程（优化版）
-
-> **核心优化**：Step 2-4 合并为单步，AI 一次性完成翻译+拆分+补齐+昵称生成，直接输出完整 JSON，减少中间文件读写。
+## 七、AI 执行流程
 
 ```
-用户上传角色卡
-    │
-    ▼
-Step 0: 格式判断（PNG/JSON）
-    │
-    ▼
-Step 1: 终端提取 + 语言检测（super_admin:terminal 执行 Python）
-    ├─ PNG: 提取 chara chunk → Base64解码 → 解析JSON
-    ├─ JSON: 直接读取
-    ├─ 输出: 角色名、各字段中文占比、缺失字段列表
-    └─ 保存原始JSON到 /tmp/chara_raw.json
-    │
-    ▼
-Step 2: AI一次性完成翻译+拆分+补齐+昵称（合并原Step 2/3/3.5/4）
-    ├─ 读取 /tmp/chara_raw.json
-    ├─ 🔍 2a. 角色特征维度识别（v2.3.1新增）
-    │     ├─ 读取 description + scenario 全文
-    │     ├─ 基础底线：确认10项基础外貌子项（姓名/性别/年龄/肤色/体型/眼睛/头发/生殖器/其他特征/穿着）
-    │     ├─ 动态额外：分析角色种族/背景/世界观，从原卡内容中提取该角色特有的额外特征维度
-    │     │   （如：狼人→+耳朵/尾巴/獠牙/Knot/口套/气味；
-    │     │    机器人→+材质/部件/能源；精灵→+耳朵形状/纹身/印记）
-    │     └─ 生成「特征维度清单」= 基础10项 + 动态额外维度，后续翻译和检查以此为基准
-    ├─ 对非中文字段翻译为简体中文
-    ├─ 清理 HTML 标签（<p>、<strong>、<em>、<img> 等）→ 转为 Markdown
-    ├─ 智能拆分：description/personality/scenario 去冗余，内容归位
-    ├─ Description增强：对照「特征维度清单」，缺失项从其他字段推断补齐
-    │     ⚠️ 禁止添加清单外的特征（如人类角色不得添加兽耳/尾巴）
-    ├─ 补齐 system_prompt / post_history_instructions / tags / mes_example
-    ├─ 生成 nickname：从 name 提取翻译后的角色全名（不拆分多个）
-    ├─ 补齐 creator / creator_notes / character_version / alternate_greetings / extensions
-    └─ 通过 cat heredoc 写入 /tmp/restructured_data.json
-    │
-    ▼
-Step 3: Python 构建 V3 JSON 并输出
-    ├─ 读取 /tmp/restructured_data.json
-    ├─ 包装为 {spec, spec_version, data} 结构
-    ├─ 输出 JSON → /sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.json
-    └─ 确保 JSON 合法（末尾 } 闭合，字符串内 " 转义）
-    │
-    ▼
-🔴 Step 3.5: 强制检查关卡（v2.3.2 — 回嵌前必须通过）
-    ├─ 🔴 3.5.1 字段检查（18项逐字段验证）
-    │     └─ 任一项不通过 → 修正 /tmp/restructured_data.json → 重新 Step 3 → 重新检查
-    ├─ 🔴 3.5.2 原卡数据逐项对比验证
-    │     └─ 任一项缺失或多余 → 修正 /tmp/restructured_data.json → 重新 Step 3 → 重新检查
-    └─ ✅ 两项检查全部通过 → 允许进入 Step 4
-    │
-    ▼
-[仅PNG输入] Step 4: PNG 回嵌
-    ├─ 保留原 PNG 头像（IHDR+IDAT）
-    ├─ 替换 chara chunk 为中文 V3 JSON
-    └─ 输出 → /sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.png
+1. 接收输入（附件/文本）
+2. 判定格式（PNG/JSON/V1/V2/V3）
+3. 提取数据
+   └─ PNG：python3 scripts/read_png_chara.py <png> [--out <json>]
+4. 检测语言
+5. 翻译（如需）
+6. 字段拆分
+7. 字段补齐
+8. 标准化为 V3
+9. 奥卡姆自检（脚本）
+   └─ python3 scripts/occam_selfcheck.py <json_path>
+10. 输出 JSON
+11. PNG 回嵌（如原为 PNG）
+    └─ python3 scripts/embed_chara_to_png.py <src> <out> <json>
+12. 最终校验（脚本自动完成）
 ```
 
-### 6.2 关键注意事项
-
-1. **使用 super_admin:terminal 而非 code_runner**：PNG 文件较大时 code_runner 易超时卡死，terminal 更稳定，建议 timeoutMs=30000
-2. **JSON 完整性检查**：输出前必须验证 JSON 合法——常见问题：末尾缺 `}`、字符串内裸双引号未转义
-3. **HTML 清理**：JanitorAI 来源的 personality 常含 `<p>`、`<strong>`、`<img>` 等标签，必须转为纯 Markdown
-4. **nickname 格式**：仅保留翻译后的角色全名，如 `凯尔`，不用分号分隔多个
-5. **保留预设内容**：`system_prompt` 和 `post_history_instructions` 开头必须添加 `{{original}}`，保留用户当前 Main Prompt / Post-History Instructions 预设，角色专属规则追加其后
-
-### 6.2 提取与检测脚本（Step 1用）
-
-```python
-python3 << 'PYEOF'
-import struct, base64, json, re
-
-p = "PNG路径"
-with open(p, "rb") as f:
-    d = f.read()
-pos = 8
-raw = None
-while pos < len(d):
-    l, ct = struct.unpack('>I', d[pos:pos+4])[0], d[pos+4:pos+8].decode()
-    cd = d[pos+8:pos+8+l]
-    pos += 12 + l
-    for pre in [b'chara\x00', b'ccv3\x00', b'text\x00']:
-        if ct in ('tEXt','zTXt') and cd.startswith(pre):
-            import zlib
-            raw = (base64.b64decode if ct=='tEXt' else zlib.decompress)(cd[len(pre):])
-            raw = raw.decode('utf-8')
-            break
-    if raw:
-        break
-if not raw:
-    print("ERROR: no chara"); exit(1)
-
-raw_stripped = raw.strip()
-if raw_stripped[0] not in ('{', '['):
-    raw = base64.b64decode(raw_stripped).decode('utf-8')
-    print("BASE64_DECODED")
-
-o = json.loads(raw)
-i = o.get('data', o) if 'spec' in o else o
-
-need = []
-for f in ['description','personality','scenario','first_mes']:
-    v = i.get(f,'') or ''
-    if v.strip():
-        cn = len(re.findall(r'[\u4e00-\u9fff]', v))
-        total = len(re.sub(r'[\s\n\t]', '', v))
-        if cn / max(total, 1) < 0.05:
-            need.append(f)
-
-tags = i.get('tags',[])
-if tags:
-    tag_str = ','.join(tags)
-    cn = len(re.findall(r'[\u4e00-\u9fff]', tag_str))
-    total = len(re.sub(r'[\s\n\t]', '', tag_str))
-    if total > 0 and cn / total < 0.05:
-        need.append('tags')
-
-print(f"NAME: {i.get('name','?')}")
-print(f"NEED_TRANSLATE: {','.join(need) if need else 'NONE'}")
-for f in ['description','personality','scenario','first_mes']:
-    print(f"LEN_{f}: {len(i.get(f,'') or '')}")
-
-# 检查缺失字段
-for k in ['system_prompt','post_history_instructions','tags','creator','creator_notes','mes_example']:
-    v = i.get(k, 'KEY_MISSING')
-    if v == 'KEY_MISSING':
-        print(f"MISSING: {k}")
-    elif isinstance(v, str) and v == '':
-        print(f"EMPTY: {k}")
-    elif v is None:
-        print(f"NULL: {k}")
-    elif isinstance(v, list) and len(v) == 0:
-        print(f"EMPTY_LIST: {k}")
-
-with open("/tmp/chara_raw.json", "w", encoding="utf-8") as f:
-    json.dump(o, f, ensure_ascii=False, indent=2)
-print("SAVED: /tmp/chara_raw.json")
-PYEOF
-```
-
-### 6.3 构建输出脚本（Step 5用）
-
-AI完成翻译+拆分+补齐后，将完整数据写入临时JSON文件，再用Python构建V3：
-
-```python
-python3 -c "
-import json, re
-
-with open('/tmp/restructured_data.json', 'r', encoding='utf-8') as f:
-    DATA = json.load(f)
-
-v3 = {
-    'spec': 'chara_card_v3',
-    'spec_version': '3.0',
-    'data': DATA
-}
-
-name_raw = DATA.get('name', 'Unknown')
-cleaned = re.sub(r'[^\u4e00-\u9fff\w\d_]', '_', name_raw)
-cleaned = re.sub(r'_+', '_', cleaned).strip('_') or 'Unknown'
-
-out = f'/sdcard/Download/Operit/charactercard/{cleaned}_V3_restructured.json'
-with open(out, 'w', encoding='utf-8') as f:
-    json.dump(v3, f, ensure_ascii=False, indent=2)
-
-print(f'OK: {out}')
-print(f'Fields: {len(DATA)}')
-"
-```
+**禁止事项**：不要在终端里手写 PNG chunk 处理代码——直接调用脚本。
 
 ---
 
-## 七、输出格式
+## 八、辅助脚本（`scripts/`）
 
-| 输入 | 输出 |
-|------|------|
-| PNG | `/sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.png`（回嵌）+ `.json` |
-| JSON | `/sdcard/Download/Operit/charactercard/{角色名}_V3_restructured.json` |
-
-文件名规则：保留中文字符、字母、数字、下划线，其余替换为下划线。
-
----
-
-## 八、版本历史
-
-| 版本 | 日期 | 变更内容 |
+| 脚本 | 用途 | 调用时机 |
 |------|------|---------|
-| **v2.3.2** | 2026-06-28 | 🔒 流程加固：4.5/4.6 检查提前至 Step 3.5（回嵌前强制关卡），两项检查全部通过后才允许 Step 4 PNG 回嵌，避免错误卡被回嵌；4.5/4.6 标题新增「MANDATORY — 回嵌前强制执行」标记 |
-| **v2.3.1** | 2026-06-26 | 🔧 修复骨架范本硬编码外貌子项导致不适配非狼人角色的问题：4.4/4.5/4.6 改为「动态特征维度识别」机制——从原卡 description+scenario 自动分析角色类型与特有特征维度，禁止添加原卡不存在的特征；Step 2 新增 2a 子步骤「角色特征维度识别」 |
-| **v2.3.0** | 2026-06-26 | 📐 新增「输出骨架范本」（4.4）：以Luka角色卡为骨架，16字段完整注释，每字段标注内容要求与生成方式；✅ 新增「输出前字段检查」（4.5）：18项逐字段验证清单，强制在Step 3后执行；🔍 新增「原卡数据逐项对比验证」（4.6）：铁律第5条的具体执行步骤，数值/颜色/特征/场景细节逐项搜索确认 |
-| **v2.2.0** | 2026-06-26 | 🚨 新增「零、最高优先级铁律」章节：禁止调用角色缓存/记忆，忠于原卡数据，强制执行完整扫描，输出后自检。优先级高于一切其他规则。 |
-| **v2.1.1** | 2026-06-22 | 📝 `system_prompt` 和 `post_history_instructions` 推演模板默认以 `{{original}}` 开头，保留用户 Main Prompt / Post-History Instructions 预设，角色专属规则追加其后；📋 新增关键注意事项第5条 |
-| **v2.1.0** | 2026-06-21 | 🏷️ 新增 nickname 字段自动生成（分号分隔多昵称）；⚡ 合并 Step 2-4 为单步，减少中间文件；📁 输出路径改为 charactercard/；🔧 指定 super_admin:terminal 执行脚本避免超时；🧹 新增 HTML 标签清理规则 |
-| **v2.0.0** | 2026-06-14 | 🧠 新增智能字段拆分模块（description/personality/scenario去冗余）；✨ 新增智能补齐模块（system_prompt/post_history_instructions/tags/mes_example自动推演）；🌐 语言检测扩展为通用非中文检测；📋 字段补齐从3个扩展到10+个；🔧 重写执行流程为6步完整管线 |
-| v1.1.0 | 2026-06-12 | Base64解码、占比阈值、V3格式、PNG回嵌修复 |
-| v1.0.0 | 2026-05-26 | 初始版本 |
+| `read_png_chara.py` | 提取 PNG 内嵌 chara JSON（V2/V3） | 步骤 3 |
+| `embed_chara_to_png.py` | 把 JSON 写回 PNG 作为 chara tEXt | 步骤 11 |
+| `occam_selfcheck.py` | 通用 §0 元铁律自检 | 步骤 9 |
+
+参数支持按脚本区分：`read_png_chara.py` 支持 `--out` / `--summary`；`embed_chara_to_png.py`、`occam_selfcheck.py` 支持 `--stdin`。各脚本均可直接用于终端或管道组合。
+
+专题 Skill（如 `角色卡转换_Bara`）会有自己的 `scripts/<topic>_selfcheck.py` 用于扩展 [T*] 检查项。
 
 ---
 
-## 九、注意事项
-1. **有则不动**：字段已有内容（非空）则只翻译，不拆分不覆盖
-2. **拆分只移动**：从冗余字段提取内容到空字段，不凭空创造角色信息
-3. **mes_example严格遵循角色设定**：不OOC，不替{{user}}说话
-4. 翻译保留感情色彩，口语化自然
-5. `{{user}}`和`{{char}}`占位符永不翻译
-6. V3格式必须`chara_card_v3`+`spec_version: 3.0`
-7. PNG回嵌保留原头像
-8. 输出文件编码UTF-8，`ensure_ascii=False`
+## 九、版本
+
+| 版本 | 变更 |
+|:---:|------|
+| **v2.5.0** | 通用化重构：性别中性、证据型补齐、专题边界、Description 通用增强；输出改为"结构统一、内容自适应" |
+| v2.4.0 | 沉淀辅助脚本（read_png_chara / embed_chara_to_png / occam_selfcheck）至 `scripts/`；§七/§八 引用脚本；禁止手写 PNG chunk 代码 |
+| v2.3.2-occam | 奥卡姆元铁律统辖；结构精简；删除冗余范本 |
+| v2.3.1 | 智能字段拆分模块 |
+| v2.3.0 | 多语种检测翻译 |
+| v2.2.0 | V1/V2 升级支持 |
+| v2.1.0 | PNG 回嵌 |
+| v2.0.0 | V3 标准输出 |
+
+---
+
+## 十、注意事项
+
+1. **不修改原图**——PNG 头/IDAT 严格保留
+2. **Base64 无换行**——tEXt chunk 内 Base64 去除 `\n`
+3. **UTF-8 编码**——所有文本字段确保 UTF-8
+4. **专题增强分支**——本 Skill 仅做通用转换；如需特定主题增强请使用对应专题分支 Skill
+5. **零奥卡姆违规**——每次输出前过 §0 自检清单
+5. **零奥卡姆违规**——每次输出前过 §0 自检清单
