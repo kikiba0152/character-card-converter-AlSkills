@@ -274,4 +274,3 @@ python3 scripts/embed_chara_to_png.py <src_png> <out_png> --stdin < new_card.jso
 3. **UTF-8 编码**——所有文本字段确保 UTF-8
 4. **专题增强分支**——本 Skill 仅做通用转换；如需特定主题增强请使用对应专题分支 Skill
 5. **零奥卡姆违规**——每次输出前过 §0 自检清单
-5. **零奥卡姆违规**——每次输出前过 §0 自检清单
